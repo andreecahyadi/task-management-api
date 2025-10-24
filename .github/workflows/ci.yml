@@ -1,4 +1,4 @@
-name: CI (Java 8 Maven)
+name: CI (Java 8 + Local Deploy)
 
 on:
   push:
@@ -11,14 +11,66 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Make Maven wrapper executable
+        run: chmod +x mvnw
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '8'
           cache: maven
-      - run: mvn -U -B test jacoco:report
-      - run: mvn -B -DskipTests package
+
+      - name: Test
+        run: ./mvnw -U -B clean test
+
+      - run: ./mvnw -B jacoco:report
+      - name: Package
+        run: ./mvnw -B -DskipTests package
+
       - uses: actions/upload-artifact@v4
         with:
           name: app-jar
           path: target/*.jar
+
+
+  # This job runs ON YOUR MACHINE (the self-hosted runner)
+  deploy-local:
+    needs: build-test
+    runs-on: self-hosted
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: ./dist
+
+      # WINDOWS deploy (service named TaskApi). This block is skipped on Linux.
+      - name: Deploy on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Jar = Get-ChildItem -Path .\dist\*.jar | Select-Object -First 1
+          if (-not $Jar) { throw "No JAR found in dist" }
+
+          New-Item -ItemType Directory -Force -Path "C:\apps\task-api" | Out-Null
+          Copy-Item -Force $Jar.FullName "C:\apps\task-api\app.jar"
+
+          $service = "TaskApi"
+          # Stop if exists
+          sc.exe query $service | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            net stop $service
+          } else {
+            # Create service if not exists (adjust Java path if needed)
+            sc.exe create $service binPath= "C:\Program Files\Java\jre1.8.0_202\bin\java.exe -jar C:\apps\task-api\app.jar" start= auto
+          }
+          net start $service
+
+      # LINUX deploy (systemd). This block is skipped on Windows.
+      - name: Deploy on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /opt/apps/task-api
+          cp ./dist/*.jar /opt/apps/task-api/app.jar
+          sudo systemctl daemon-reload || true
+          sudo systemctl restart task-api || true
