@@ -33,7 +33,6 @@ jobs:
           name: app-jar
           path: target/*.jar
 
-
   # This job runs ON YOUR MACHINE (the self-hosted runner)
   deploy-local:
     needs: build-test
